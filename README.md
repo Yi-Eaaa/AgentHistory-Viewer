@@ -22,24 +22,19 @@
 
 ```bash
 npm install
-npm run dev
-```
-
-打开 [http://127.0.0.1:30100](http://127.0.0.1:30100)。开发命令会同时启动页面和本地历史 API。
-
-### 生产模式
-
-```bash
-npm install
 npm run build
 npm start
 ```
 
-默认只监听 `127.0.0.1:30100`。可以直接指定其他端口：
+启动后打开完整地址：[http://127.0.0.1:30100](http://127.0.0.1:30100)。
+
+默认只监听 `http://127.0.0.1:30100`。可以直接指定其他端口：
 
 ```bash
 PORT=8080 npm start
 ```
+
+此时打开完整地址：[http://127.0.0.1:8080](http://127.0.0.1:8080)。
 
 也可以复制配置模板：
 
@@ -47,7 +42,43 @@ PORT=8080 npm start
 cp .env.example .env
 ```
 
-`npm run dev` 与 `npm start` 会自动读取项目根目录的 `.env`，shell 环境变量优先。
+`npm start` 会自动读取项目根目录的 `.env`，shell 环境变量优先。
+
+## 注册为系统服务
+
+先完成依赖安装和生产构建，然后注册当前操作系统对应的后台服务：
+
+```bash
+npm install
+npm run build
+npm run service:install
+```
+
+安装后服务会自动启动，并在后续开机或用户登录时运行。访问完整地址：[http://127.0.0.1:30100](http://127.0.0.1:30100)。安装服务前请先停止手动运行的 `npm start`，避免端口冲突。
+
+通用管理命令：
+
+```bash
+npm run service:status
+npm run service:restart
+npm run service:uninstall
+```
+
+平台行为：
+
+- macOS：注册为当前用户的 `launchd` LaunchAgent，配置位于 `~/Library/LaunchAgents/com.agent-history.viewer.plist`，日志写入 `state/service.stdout.log` 和 `state/service.stderr.log`。
+- Linux：注册为当前用户的 `systemd --user` 服务 `agent-history.service`，日志通过 `journalctl --user -u agent-history` 查看。若需要在用户登录前启动，可由管理员额外启用 linger。
+- Windows：使用固定版本的 [WinSW](https://github.com/winsw/winsw) 注册为真正的 Windows 服务 `AgentHistory`。安装脚本会从 WinSW 官方发布页下载包装器，需要联网，并且必须在管理员终端中执行 `npm run service:install`。
+
+更新代码后执行：
+
+```bash
+npm install
+npm run build
+npm run service:restart
+```
+
+如果移动了项目目录或更换了 Node.js 安装位置，请重新执行 `npm run service:install`，让服务记录新的绝对路径。
 
 ## 配置
 
@@ -72,25 +103,19 @@ npm start
 
 然后访问 `http://<本机局域网IP>:30100`。
 
-## 数据与隐私
-
-- 原始历史目录只读；重新扫描不会更改 Codex 或 Claude Code 文件。
-- 收藏保存在 `state/history.db`，不按 Basic Auth 用户隔离。
-- 解析结果只缓存在当前服务进程内，历史文件的大小或修改时间变化后会自动失效。
-- 对话里可能包含代码、路径、命令输出和密钥。未配置认证时请保持 `HOST=127.0.0.1`，不要暴露到不可信网络。
-- HTTP Basic Auth 不提供传输加密；跨不可信网络访问时应在前面配置 HTTPS 反向代理或使用安全隧道。
-
 ## 项目结构
 
 ```text
-app/                    React 页面与样式
-server/
-  index.mjs             HTTP API、Basic Auth、页面反向代理
-  history-store.mjs     文件扫描、缓存、搜索、收藏、统计、导出
-  parsers.mjs           Codex / Claude Code 格式归一化
-scripts/run.mjs         同时管理页面和 API 进程
-state/                  运行时收藏数据库（git ignored）
-tests/                  解析器、存储与页面构建测试
+- app/                    React 页面与样式
+- server/
+  - index.mjs             HTTP API、Basic Auth、页面反向代理
+  - history-store.mjs     文件扫描、缓存、搜索、收藏、统计、导出
+  - parsers.mjs           Codex / Claude Code 格式归一化
+- scripts/run.mjs         同时管理页面和 API 进程
+- scripts/service.mjs     macOS / Linux / Windows 服务管理入口
+- deploy/windows/         Windows SCM / WinSW 安装脚本
+- state/                  运行时收藏数据库（git ignored）
+- tests/                  解析器、存储与页面构建测试
 ```
 
 ## API
@@ -102,11 +127,3 @@ tests/                  解析器、存储与页面构建测试
 - `PUT|DELETE /api/favorites/:source/:id`：添加或移除收藏
 - `GET /api/stats`：统计；支持 `source`、`granularity`、`from`、`to`
 - `GET /api/export/:source/:id?format=md|html`：导出会话
-
-## 验证
-
-```bash
-npm test
-npm run lint
-npx tsc --noEmit
-```
