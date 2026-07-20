@@ -1,6 +1,6 @@
-# Agent History
+# AgentHistory-Viewer
 
-本机 Agent 对话历史浏览服务，首版支持 **Codex** 与 **Claude Code**。
+跨平台的本机 Agent 对话历史查看服务，支持 **Codex** 与 **Claude Code**。
 
 服务只读扫描历史文件，在浏览器中提供统一的会话时间线；收藏数据单独写入项目内的 SQLite，不修改原始对话。
 

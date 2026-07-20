@@ -567,7 +567,7 @@ export default function HistoryApp() {
         <div className="brand-block">
           <button className="mobile-menu" onClick={() => setDrawerOpen(true)} aria-label="打开会话导航">☰</button>
           <span className="brand-mark" aria-hidden="true" />
-          <strong className="brand-title">Agent History</strong>
+          <strong className="brand-title">AgentHistory Viewer</strong>
         </div>
         <label className="global-search">
           <span>⌕</span>

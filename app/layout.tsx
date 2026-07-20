@@ -6,7 +6,7 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Agent History",
+  title: "AgentHistory Viewer",
   description: "本机 Codex 与 Claude Code 对话历史浏览器",
   icons: {
     icon: [{ url: "/favicon.png", type: "image/png", sizes: "64x64" }],

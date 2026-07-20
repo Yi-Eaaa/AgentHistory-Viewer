@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ServiceName = "AgentHistory"
-$ServiceDisplayName = "Agent History"
+$ServiceDisplayName = "AgentHistory Viewer"
 $WinSWVersion = "2.12.0"
 $ServiceDirectory = Join-Path $ProjectRoot "state\windows-service"
 $LogDirectory = Join-Path $ServiceDirectory "logs"
@@ -109,7 +109,7 @@ $config = @"
 <service>
   <id>$ServiceName</id>
   <name>$ServiceDisplayName</name>
-  <description>Local Codex and Claude Code conversation history viewer.</description>
+  <description>AgentHistory Viewer for local Codex and Claude Code conversations.</description>
   <executable>$escapedNode</executable>
   <arguments>$escapedArguments</arguments>
   <workingdirectory>$escapedRoot</workingdirectory>

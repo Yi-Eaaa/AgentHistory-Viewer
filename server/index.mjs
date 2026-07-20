@@ -53,7 +53,7 @@ function proxy(request, response) {
 
 const server = http.createServer(async (request, response) => {
   if (!authorized(request)) {
-    response.writeHead(401, { "www-authenticate": 'Basic realm="Agent History"', "content-type": "text/plain; charset=utf-8" });
+    response.writeHead(401, { "www-authenticate": 'Basic realm="AgentHistory Viewer"', "content-type": "text/plain; charset=utf-8" });
     response.end("需要登录");
     return;
   }
@@ -113,7 +113,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Agent History 已启动：http://${host}:${port}`);
+  console.log(`AgentHistory Viewer 已启动：http://${host}:${port}`);
   console.log(`Codex: ${store.roots.codex}`);
   console.log(`Claude Code: ${store.roots.claude}`);
   if (!username || !password) console.log("认证：未启用（默认仅监听本机）");

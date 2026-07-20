@@ -13,13 +13,13 @@ async function render() {
   );
 }
 
-test("server renders the Agent History application shell", async () => {
+test("server renders the AgentHistory Viewer application shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Agent History<\/title>/i);
-  assert.match(html, /Agent History/);
+  assert.match(html, /<title>AgentHistory Viewer<\/title>/i);
+  assert.match(html, /AgentHistory Viewer/);
   assert.match(html, /favicon\.png/);
   assert.doesNotMatch(html, /LOCAL ARCHIVE|本机只读|历史数据不会上传/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);

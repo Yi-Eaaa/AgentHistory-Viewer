@@ -62,7 +62,7 @@ export function renderLaunchAgent({ nodePath, root, stdoutPath, stderrPath }) {
 
 export function renderSystemdUnit({ nodePath, root }) {
   return `[Unit]
-Description=Agent History local conversation viewer
+Description=AgentHistory Viewer local conversation viewer
 After=network.target
 
 [Service]
@@ -189,7 +189,7 @@ function windowsService(action) {
 }
 
 export function printHelp() {
-  console.log(`Agent History 系统服务管理
+  console.log(`AgentHistory Viewer 系统服务管理
 
 用法：node scripts/service.mjs <install|uninstall|restart|status>
 
