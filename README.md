@@ -38,7 +38,7 @@ AgentHistory Viewer 会统一扫描并解析这些本机记录，在一个浏览
 - 跨 Codex / Claude Code 的来源、工作区和收藏筛选
 - 会话搜索、全文搜索、提问大纲和快速跳转
 - Token、模型、工具调用和活动趋势统计
-- Markdown / HTML 导出与跨平台后台服务
+- Markdown / HTML 阅读导出、可恢复会话包与跨平台后台服务
 
 ## 功能一览
 
@@ -49,7 +49,8 @@ AgentHistory Viewer 会统一扫描并解析这些本机记录，在一个浏览
 | 🔎 | **双层搜索** | 支持跨会话全文搜索，也可以只在当前会话内定位内容。 |
 | 📌 | **收藏与大纲** | SQLite 持久化收藏；按用户提问生成大纲并快速跳转。 |
 | 📊 | **使用统计** | 查看 Token 趋势、16 周活动热力图、常用模型和输入/输出/缓存构成。 |
-| 📦 | **导出与部署** | 导出 Markdown / HTML，并可注册为 macOS、Linux、Windows 系统服务。 |
+| 📦 | **迁移与恢复** | 将完整会话导出为 `.agenthistory.zip`，在另一台机器或另一位用户的环境中导入并继续对话。 |
+| ⚙️ | **跨平台服务** | 可注册为 macOS、Linux、Windows 系统服务。 |
 
 ### 会话时间线
 
@@ -66,20 +67,31 @@ AgentHistory Viewer 会统一扫描并解析这些本机记录，在一个浏览
 
 统计可以按日、月、年查看，并汇总会话数、消息数、Token 总量、工具调用次数、模型用量与活动分布。
 
+### 完整会话迁移
+
+1. 在源环境选择一个会话，点击标题区域的“导出会话”，下载 `.agenthistory.zip` 压缩包。
+2. 在目标环境点击页面顶部的“导入”，选择刚才导出的压缩包。
+3. 选择“保持原工作区”，或将会话映射到目标机器上的新工作区绝对路径。
+4. 确认会话信息并执行导入；若存在相同 Session ID，按页面提示确认是否覆盖。
+5. 导入完成后打开该会话，复制页面提供的命令即可恢复并继续对话。
+
 ## 工作方式
 
 ```mermaid
 flowchart LR
-    Codex["~/.codex/sessions"] --> Scan["只读扫描 JSONL"]
+    Codex["~/.codex/sessions"] --> Scan["扫描 JSONL"]
     Claude["~/.claude/projects"] --> Scan
     Scan --> Parse["统一解析与会话归一化"]
     Parse --> API["本机 HTTP API"]
     Favorites["SQLite 收藏"] <--> API
     API --> UI["AgentHistory Viewer"]
-    UI --> Export["Markdown / HTML 导出"]
+    UI --> Export["阅读导出 / 完整会话包"]
+    Package[".agenthistory.zip"] --> Verify["预检 / 校验 / 冲突确认"]
+    Verify --> Codex
+    Verify --> Claude
 ```
 
-原始历史目录只参与读取；收藏数据保存在项目的 `state/history.db` 中。
+日常浏览只读取原始历史目录；只有用户明确完成会话导入时，服务才会写入对应的 Agent 历史目录。收藏数据保存在项目的 `state/history.db` 中。
 
 ## 快速开始
 
@@ -164,6 +176,7 @@ npm run service:restart
 | `AGENT_HISTORY_STATE` | `./state` | 收藏数据库与运行状态目录 |
 | `AGENT_HISTORY_USERNAME` | 空 | HTTP Basic Auth 用户名 |
 | `AGENT_HISTORY_PASSWORD` | 空 | HTTP Basic Auth 密码 |
+| `AGENT_HISTORY_IMPORT_MAX_BYTES` | `536870912` | 单个导入压缩包的最大字节数，默认 512 MiB |
 
 若要从同一局域网的其他设备访问，请同时配置监听地址和认证：
 
@@ -190,6 +203,9 @@ npm start
 | `PUT` / `DELETE` | `/api/favorites/:source/:id` | 添加或移除收藏 |
 | `GET` | `/api/stats` | 使用统计；支持 `source`、`granularity`、`from`、`to` |
 | `GET` | `/api/export/:source/:id?format=md\|html` | 导出 Markdown 或 HTML |
+| `GET` | `/api/portable/export/:source/:id` | 导出可恢复的 `.agenthistory.zip` 完整会话包 |
+| `POST` | `/api/portable/inspect` | 预检并校验会话包，不写入历史目录 |
+| `POST` | `/api/portable/import?mode=original\|mapped&workspace=...&overwrite=true\|false` | 导入会话；映射模式需要目标工作区，冲突覆盖需要显式确认 |
 
 `/api/sessions` 仍兼容旧参数 `project`，建议新调用使用 `workspace`。
 
@@ -203,6 +219,7 @@ npm start
   - index.mjs             HTTP API、Basic Auth、页面反向代理
   - history-store.mjs     文件扫描、缓存、搜索、收藏、统计、导出
   - parsers.mjs           Codex / Claude Code 格式归一化
+  - portable-session.mjs  完整会话包、校验、路径映射、备份与恢复
 - scripts/
   - run.mjs               同时管理页面与 API 进程
   - service.mjs           macOS / Linux / Windows 服务管理入口

@@ -3,6 +3,11 @@ import path from "node:path";
 import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { parseClaude, parseCodex } from "./parsers.mjs";
+import {
+  createPortableSession,
+  importPortableSession,
+  inspectPortableSession,
+} from "./portable-session.mjs";
 import { compactText, dateBucket, htmlEscape } from "./utils.mjs";
 
 async function walkJsonl(root, depth = 6) {
@@ -350,5 +355,17 @@ export class HistoryStore {
       }),
     ].join("\n");
     return { contentType: "text/markdown; charset=utf-8", extension: "md", body };
+  }
+
+  async exportPortable(source, id) {
+    return createPortableSession(this, source, id);
+  }
+
+  async inspectPortable(buffer) {
+    return inspectPortableSession(this, buffer);
+  }
+
+  async importPortable(buffer, options = {}) {
+    return importPortableSession(this, buffer, options);
   }
 }
