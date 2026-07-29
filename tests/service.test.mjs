@@ -62,7 +62,7 @@ test("systemd unit runs the project with the current absolute Node binary", () =
     nodePath: "/opt/node current/bin/node",
     root: "/srv/agent history%archive",
   });
-  assert.match(unit, /WorkingDirectory="\/srv\/agent history%%archive"/);
+  assert.match(unit, /\nWorkingDirectory=\/srv\/agent history%%archive\n/);
   assert.match(unit, /ExecStart="\/opt\/node current\/bin\/node" "\/srv\/agent history%%archive\/scripts\/run\.mjs" start/);
   assert.match(unit, /Restart=on-failure/);
   assert.match(unit, /WantedBy=default\.target/);

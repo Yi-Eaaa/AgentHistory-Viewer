@@ -23,8 +23,12 @@ function xmlEscape(value) {
     .replaceAll("'", "&apos;");
 }
 
+function systemdSpecifierEscape(value) {
+  return String(value).replaceAll("%", "%%");
+}
+
 function systemdQuote(value) {
-  return `"${String(value).replaceAll("%", "%%").replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  return `"${systemdSpecifierEscape(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
 export function renderLaunchAgent({ nodePath, root, stdoutPath, stderrPath }) {
@@ -71,7 +75,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=${systemdQuote(root)}
+WorkingDirectory=${systemdSpecifierEscape(root)}
 ExecStart=${systemdQuote(nodePath)} ${systemdQuote(join(root, "scripts", "run.mjs"))} start
 Environment="NODE_ENV=production"
 Restart=on-failure
