@@ -17,6 +17,16 @@ import { compactText, dateBucket, htmlEscape } from "./utils.mjs";
 const DEFAULT_PORTABLE_IMPORT_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_PORTABLE_IMPORT_CACHE_BYTES = 256 * 1024 * 1024;
 
+export function resolveHistoryRoot(configured, fallback) {
+  const raw = typeof configured === "string" ? configured.trim() : configured;
+  if (!raw) return fallback;
+  if (raw === "~") return os.homedir();
+  const expanded = raw.startsWith("~/") || raw.startsWith("~\\")
+    ? path.join(os.homedir(), raw.slice(2))
+    : raw;
+  return path.resolve(expanded);
+}
+
 async function walkJsonl(root, depth = 6) {
   const files = [];
   async function visit(directory, remaining) {
@@ -133,8 +143,14 @@ function mergeSubagents(parent, children) {
 export class HistoryStore {
   constructor(options = {}) {
     this.roots = {
-      codex: options.codexRoot ?? process.env.CODEX_HISTORY_ROOT ?? path.join(os.homedir(), ".codex", "sessions"),
-      claude: options.claudeRoot ?? process.env.CLAUDE_HISTORY_ROOT ?? path.join(os.homedir(), ".claude", "projects"),
+      codex: resolveHistoryRoot(
+        options.codexRoot ?? process.env.CODEX_HISTORY_ROOT,
+        path.join(os.homedir(), ".codex", "sessions"),
+      ),
+      claude: resolveHistoryRoot(
+        options.claudeRoot ?? process.env.CLAUDE_HISTORY_ROOT,
+        path.join(os.homedir(), ".claude", "projects"),
+      ),
     };
     this.stateDir = options.stateDir ?? process.env.AGENT_HISTORY_STATE ?? path.resolve("state");
     this.files = new Map();

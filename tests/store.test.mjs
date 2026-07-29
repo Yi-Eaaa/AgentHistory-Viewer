@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import path from "node:path";
-import { HistoryStore } from "../server/history-store.mjs";
+import { HistoryStore, resolveHistoryRoot } from "../server/history-store.mjs";
 
 test("HistoryStore scans, searches, favorites and exports", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "agent-history-store-"));
@@ -84,4 +84,32 @@ test("HistoryStore scans, searches, favorites and exports", async () => {
   assert.match(markdown.body, /独特搜索词/);
   const html = await store.export("codex", id, "html");
   assert.match(html.body, /<!doctype html>/);
+});
+
+test("history roots fall back to the current user's home directory", () => {
+  const home = os.homedir();
+  const codexDefault = path.join(home, ".codex", "sessions");
+  assert.equal(resolveHistoryRoot(undefined, codexDefault), codexDefault);
+  assert.equal(resolveHistoryRoot("", codexDefault), codexDefault);
+  assert.equal(resolveHistoryRoot("   ", codexDefault), codexDefault);
+  assert.equal(resolveHistoryRoot("~/.codex/sessions", codexDefault), codexDefault);
+  assert.equal(resolveHistoryRoot("~", codexDefault), home);
+  assert.equal(resolveHistoryRoot("/srv/shared/codex", codexDefault), "/srv/shared/codex");
+  assert.equal(resolveHistoryRoot(" /srv/shared/codex ", codexDefault), "/srv/shared/codex");
+});
+
+test("HistoryStore ignores blank root overrides instead of scanning the process cwd", () => {
+  const previous = { codex: process.env.CODEX_HISTORY_ROOT, claude: process.env.CLAUDE_HISTORY_ROOT };
+  process.env.CODEX_HISTORY_ROOT = "";
+  process.env.CLAUDE_HISTORY_ROOT = "~/.claude/projects";
+  try {
+    const store = new HistoryStore();
+    assert.equal(store.roots.codex, path.join(os.homedir(), ".codex", "sessions"));
+    assert.equal(store.roots.claude, path.join(os.homedir(), ".claude", "projects"));
+  } finally {
+    for (const [key, value] of [["CODEX_HISTORY_ROOT", previous.codex], ["CLAUDE_HISTORY_ROOT", previous.claude]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

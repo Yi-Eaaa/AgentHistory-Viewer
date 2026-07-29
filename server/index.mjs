@@ -1,4 +1,5 @@
 import http from "node:http";
+import { existsSync } from "node:fs";
 import { URL } from "node:url";
 import { Buffer } from "node:buffer";
 import { request as proxyRequest } from "node:http";
@@ -205,8 +206,9 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(port, host, () => {
   console.log(`AgentHistory Viewer 已启动：http://${host}:${port}`);
-  console.log(`Codex: ${store.roots.codex}`);
-  console.log(`Claude Code: ${store.roots.claude}`);
+  for (const [label, root] of [["Codex", store.roots.codex], ["Claude Code", store.roots.claude]]) {
+    console.log(`${label}: ${root}${existsSync(root) ? "" : "（目录不存在，该来源无历史记录）"}`);
+  }
   if (!username || !password) console.log("认证：未启用（默认仅监听本机）");
 });
 
