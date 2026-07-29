@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 
 export const SERVICE_ID = "agent-history";
 export const MACOS_LABEL = "com.agent-history.viewer";
+const MACOS_BOOTSTRAP_RETRY_STATUS = 5;
+const MACOS_BOOTSTRAP_ATTEMPTS = 5;
+const MACOS_UNLOAD_ATTEMPTS = 30;
+const MACOS_RETRY_DELAY_MS = 200;
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = join(projectRoot, "state");
@@ -95,6 +99,29 @@ function run(command, args, { allowFailure = false, quiet = false } = {}) {
   return result.status ?? 0;
 }
 
+function pause(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+export function retryTransientStatus(
+  action,
+  {
+    attempts = MACOS_BOOTSTRAP_ATTEMPTS,
+    retryStatuses = [MACOS_BOOTSTRAP_RETRY_STATUS],
+    delayMs = MACOS_RETRY_DELAY_MS,
+    sleep = pause,
+  } = {},
+) {
+  const totalAttempts = Math.max(1, attempts);
+  let status = 1;
+  for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+    status = action(attempt, totalAttempts);
+    if (status === 0 || !retryStatuses.includes(status) || attempt === totalAttempts - 1) return status;
+    sleep(delayMs * (attempt + 1));
+  }
+  return status;
+}
+
 function assertReady() {
   const required = [
     join(projectRoot, "dist", "server", "index.js"),
@@ -106,6 +133,48 @@ function assertReady() {
   }
 }
 
+function macosServiceLoaded(target) {
+  return run("launchctl", ["print", target], { allowFailure: true, quiet: true }) === 0;
+}
+
+function waitForMacosServiceUnloaded(target) {
+  for (let attempt = 0; attempt < MACOS_UNLOAD_ATTEMPTS; attempt += 1) {
+    if (!macosServiceLoaded(target)) return;
+    pause(MACOS_RETRY_DELAY_MS);
+  }
+  throw new Error(`旧服务 ${MACOS_LABEL} 未能及时退出，请稍后重试`);
+}
+
+function writeMacosServiceFile(serviceFile) {
+  mkdirSync(dirname(serviceFile), { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(serviceFile, renderLaunchAgent({
+    nodePath: process.execPath,
+    root: projectRoot,
+    stdoutPath: join(stateDir, "service.stdout.log"),
+    stderrPath: join(stateDir, "service.stderr.log"),
+  }));
+  run("plutil", ["-lint", serviceFile]);
+}
+
+function bootstrapMacosService(domain, serviceFile) {
+  const status = retryTransientStatus(
+    (attempt, attempts) => run(
+      "launchctl",
+      ["bootstrap", domain, serviceFile],
+      { allowFailure: true, quiet: attempt < attempts - 1 },
+    ),
+  );
+  if (status !== 0) throw new Error(`launchctl bootstrap 执行失败，退出码 ${status}`);
+}
+
+function loadMacosService(domain, target, serviceFile) {
+  writeMacosServiceFile(serviceFile);
+  bootstrapMacosService(domain, serviceFile);
+  run("launchctl", ["enable", target]);
+  run("launchctl", ["kickstart", "-k", target]);
+}
+
 function macosService(action) {
   if (typeof process.getuid !== "function") throw new Error("无法取得当前用户 UID。");
   const domain = `gui/${process.getuid()}`;
@@ -114,18 +183,9 @@ function macosService(action) {
 
   if (action === "install") {
     assertReady();
-    mkdirSync(dirname(serviceFile), { recursive: true });
-    mkdirSync(stateDir, { recursive: true });
     run("launchctl", ["bootout", target], { allowFailure: true, quiet: true });
-    writeFileSync(serviceFile, renderLaunchAgent({
-      nodePath: process.execPath,
-      root: projectRoot,
-      stdoutPath: join(stateDir, "service.stdout.log"),
-      stderrPath: join(stateDir, "service.stderr.log"),
-    }));
-    run("launchctl", ["bootstrap", domain, serviceFile]);
-    run("launchctl", ["enable", target]);
-    run("launchctl", ["kickstart", "-k", target]);
+    waitForMacosServiceUnloaded(target);
+    loadMacosService(domain, target, serviceFile);
     console.log(`已安装并启动 macOS 用户服务：${MACOS_LABEL}`);
     return;
   }
@@ -137,7 +197,12 @@ function macosService(action) {
   }
   if (action === "restart") {
     assertReady();
-    run("launchctl", ["kickstart", "-k", target]);
+    if (!macosServiceLoaded(target)) {
+      console.log(`服务 ${MACOS_LABEL} 尚未注册，正在自动恢复…`);
+      loadMacosService(domain, target, serviceFile);
+    } else {
+      run("launchctl", ["kickstart", "-k", target]);
+    }
     return;
   }
   run("launchctl", ["print", target]);

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { MACOS_LABEL, renderLaunchAgent, renderSystemdUnit } from "../scripts/service.mjs";
+import {
+  MACOS_LABEL,
+  renderLaunchAgent,
+  renderSystemdUnit,
+  retryTransientStatus,
+} from "../scripts/service.mjs";
 
 test("macOS LaunchAgent uses absolute paths and escapes plist values", () => {
   const plist = renderLaunchAgent({
@@ -15,6 +20,41 @@ test("macOS LaunchAgent uses absolute paths and escapes plist values", () => {
   assert.match(plist, /Agent &amp; History\/scripts\/run\.mjs/);
   assert.match(plist, /<key>RunAtLoad<\/key>\s*<true\/>/);
   assert.match(plist, /<key>KeepAlive<\/key>\s*<true\/>/);
+});
+
+test("macOS bootstrap retries transient launchd status without retrying permanent failures", () => {
+  const delays = [];
+  let attempts = 0;
+  const recovered = retryTransientStatus(
+    () => {
+      attempts += 1;
+      return attempts < 3 ? 5 : 0;
+    },
+    { attempts: 5, delayMs: 10, sleep: (delay) => delays.push(delay) },
+  );
+  assert.equal(recovered, 0);
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [10, 20]);
+
+  attempts = 0;
+  const permanent = retryTransientStatus(
+    () => {
+      attempts += 1;
+      return 113;
+    },
+    { attempts: 5, sleep: () => assert.fail("permanent errors must not sleep") },
+  );
+  assert.equal(permanent, 113);
+  assert.equal(attempts, 1);
+});
+
+test("macOS restart restores a missing service registration", async () => {
+  const source = await readFile(new URL("../scripts/service.mjs", import.meta.url), "utf8");
+  assert.match(source, /waitForMacosServiceUnloaded\(target\)/);
+  assert.match(source, /if \(!macosServiceLoaded\(target\)\)/);
+  assert.match(source, /服务 \$\{MACOS_LABEL\} 尚未注册，正在自动恢复/);
+  assert.match(source, /loadMacosService\(domain, target, serviceFile\)/);
+  assert.match(source, /run\("plutil", \["-lint", serviceFile\]\)/);
 });
 
 test("systemd unit runs the project with the current absolute Node binary", () => {
