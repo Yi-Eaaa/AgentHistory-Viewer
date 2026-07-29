@@ -164,7 +164,6 @@ npm run service:restart
 ```
 
 如果移动了项目目录或更换了 Node.js 安装位置，请重新运行 `npm run service:install`，让服务记录新的绝对路径。
-在 macOS 上，如果 LaunchAgent 配置仍在但注册状态意外丢失，`npm run service:restart` 会自动重新注册并启动服务。
 
 ## 配置
 
