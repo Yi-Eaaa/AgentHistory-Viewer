@@ -154,6 +154,8 @@ test("portable session import and export expose preflight, workspace mapping and
   assert.match(source, />导出会话<\/a>/);
   assert.match(source, /\/api\/portable\/inspect/);
   assert.match(source, /\/api\/portable\/import\?\$\{params\}/);
+  assert.match(source, /JSON\.stringify\(\{ importToken: importPreview\.importToken \}\)/);
+  assert.match(source, /void loadSessions\(importedKey\)/);
   assert.match(source, /保持原工作区/);
   assert.match(source, /映射到新工作区/);
   assert.match(source, /overwriteArmed/);
@@ -163,5 +165,7 @@ test("portable session import and export expose preflight, workspace mapping and
   assert.match(css, /\.import-warning\.danger/);
   assert.match(server, /\/api\/portable\/inspect/);
   assert.match(server, /\/api\/portable\/import/);
+  assert.match(server, /store\.preparePortable\(body\)/);
+  assert.match(server, /store\.importPreparedPortable\(payload\?\.importToken, options\)/);
   assert.match(server, /AGENT_HISTORY_IMPORT_MAX_BYTES/);
 });

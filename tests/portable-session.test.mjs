@@ -6,7 +6,7 @@ import test from "node:test";
 import { HistoryStore } from "../server/history-store.mjs";
 import { PortableSessionError } from "../server/portable-session.mjs";
 
-async function makeStore(root, name) {
+async function makeStore(root, name, options = {}) {
   const profile = path.join(root, name);
   const codexRoot = path.join(profile, ".codex", "sessions");
   const claudeRoot = path.join(profile, ".claude", "projects");
@@ -16,6 +16,7 @@ async function makeStore(root, name) {
     codexRoot,
     claudeRoot,
     stateDir: path.join(profile, "state"),
+    ...options,
   });
   return { profile, codexRoot, claudeRoot, store };
 }
@@ -45,33 +46,52 @@ test("Codex portable archive includes descendants, round-trips, checks conflict 
 
   const exported = await source.store.exportPortable("codex", id);
   assert.equal(exported.manifest.files.filter((file) => file.role === "subagent").length, 1);
-  const preview = await target.store.inspectPortable(exported.body);
+  const preview = await target.store.preparePortable(exported.body);
   assert.equal(preview.conflict, false);
   assert.equal(preview.sessionId, id);
   assert.equal(preview.subagentCount, 1);
+  assert.match(preview.importToken, /^[0-9a-f-]{36}$/);
+  assert.ok(new Date(preview.importTokenExpiresAt).getTime() > Date.now());
 
-  const imported = await target.store.importPortable(exported.body, { mode: "original" });
+  const imported = await target.store.importPreparedPortable(preview.importToken, { mode: "original" });
   assert.equal(imported.sessionId, id);
   assert.equal(imported.workspace, "/work/original");
   assert.match(imported.resume.command, new RegExp(`codex -C .* resume ${id}`));
+  await assert.rejects(
+    target.store.importPreparedPortable(preview.importToken, { mode: "original" }),
+    (error) => error instanceof PortableSessionError && error.code === "IMPORT_TOKEN_EXPIRED" && error.status === 410,
+  );
   const restored = await target.store.get("codex", id);
   assert.equal(restored.subagentCount, 1);
   const index = await readFile(path.join(target.profile, ".codex", "session_index.jsonl"), "utf8");
   assert.match(index, new RegExp(id));
 
-  const conflictingPreview = await target.store.inspectPortable(exported.body);
+  const conflictingPreview = await target.store.preparePortable(exported.body);
   assert.equal(conflictingPreview.conflict, true);
   await assert.rejects(
-    target.store.importPortable(exported.body, { mode: "original" }),
+    target.store.importPreparedPortable(conflictingPreview.importToken, { mode: "original" }),
     (error) => error instanceof PortableSessionError && error.code === "SESSION_CONFLICT",
   );
 
   const targetMain = target.store.files.get(`codex:${id}`).path;
   await writeFile(targetMain, "locally changed");
-  const overwritten = await target.store.importPortable(exported.body, { mode: "original", overwrite: true });
+  const overwritten = await target.store.importPreparedPortable(conflictingPreview.importToken, { mode: "original", overwrite: true });
   assert.equal(overwritten.overwritten, true);
   assert.ok(overwritten.backupPath);
   assert.equal(await readFile(targetMain, "utf8"), await readFile(mainPath, "utf8"));
+
+  const expiredPreview = await target.store.preparePortable(exported.body);
+  target.store.portableImports.get(expiredPreview.importToken).expiresAt = 0;
+  await assert.rejects(
+    target.store.importPreparedPortable(expiredPreview.importToken, { mode: "original", overwrite: true }),
+    (error) => error instanceof PortableSessionError && error.code === "IMPORT_TOKEN_EXPIRED",
+  );
+
+  const constrained = await makeStore(root, "constrained", { portableImportCacheBytes: 1 });
+  await constrained.store.init();
+  const uncachedPreview = await constrained.store.preparePortable(exported.body);
+  assert.equal(uncachedPreview.importToken, null);
+  assert.equal(uncachedPreview.importTokenExpiresAt, null);
 });
 
 test("Claude portable archive maps a foreign workspace without changing message content", async () => {

@@ -210,13 +210,15 @@ async function readAndValidateArchive(buffer) {
     throw new PortableSessionError("manifest.json 无法解析", { code: "INVALID_MANIFEST" });
   }
   validateManifest(manifest);
+  const validatedFiles = {};
   for (const item of manifest.files) {
     const data = files[item.archivePath];
     if (!data || data.byteLength !== item.size || sha256(data) !== item.sha256) {
       throw new PortableSessionError(`文件校验失败：${item.archivePath}`, { code: "CHECKSUM_MISMATCH" });
     }
+    validatedFiles[item.archivePath] = data;
   }
-  return { manifest, files };
+  return { manifest, files: validatedFiles };
 }
 
 function replaceWorkspaceInTranscript(data, source, originalWorkspace, targetWorkspace) {
@@ -385,8 +387,7 @@ function findConflicts(store, manifest) {
   });
 }
 
-export async function inspectPortableSession(store, buffer) {
-  const { manifest } = await readAndValidateArchive(buffer);
+function portablePreview(store, manifest) {
   const conflicts = findConflicts(store, manifest);
   return {
     format: manifest.format,
@@ -405,6 +406,18 @@ export async function inspectPortableSession(store, buffer) {
     conflict: conflicts.some((item) => item.main),
     conflicts,
   };
+}
+
+export async function preparePortableSession(store, buffer) {
+  const validated = await readAndValidateArchive(buffer);
+  return {
+    preview: portablePreview(store, validated.manifest),
+    validated,
+  };
+}
+
+export async function inspectPortableSession(store, buffer) {
+  return (await preparePortableSession(store, buffer)).preview;
 }
 
 function mappedRelativePath(manifest, item, targetWorkspace) {
@@ -452,8 +465,8 @@ async function updateCodexTextIndex(store, manifest) {
   }
 }
 
-export async function importPortableSession(store, buffer, options = {}) {
-  const { manifest, files } = await readAndValidateArchive(buffer);
+export async function importValidatedPortableSession(store, validated, options = {}) {
+  const { manifest, files } = validated;
   const mode = options.mode === "mapped" ? "mapped" : "original";
   const targetWorkspace = mode === "mapped" ? String(options.workspace ?? "").trim() : manifest.originalWorkspace;
   if (mode === "mapped" && (!targetWorkspace || !path.isAbsolute(targetWorkspace))) {
@@ -569,4 +582,8 @@ export async function importPortableSession(store, buffer, options = {}) {
     backupPath: backups.length ? backupRoot : null,
     resume: resumeDetails(manifest.source, manifest.sessionId, targetWorkspace),
   };
+}
+
+export async function importPortableSession(store, buffer, options = {}) {
+  return importValidatedPortableSession(store, await readAndValidateArchive(buffer), options);
 }

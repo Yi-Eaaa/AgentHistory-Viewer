@@ -1,14 +1,21 @@
 import { readdir, stat, mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { parseClaude, parseCodex } from "./parsers.mjs";
 import {
   createPortableSession,
+  importValidatedPortableSession,
   importPortableSession,
   inspectPortableSession,
+  preparePortableSession,
+  PortableSessionError,
 } from "./portable-session.mjs";
 import { compactText, dateBucket, htmlEscape } from "./utils.mjs";
+
+const DEFAULT_PORTABLE_IMPORT_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_PORTABLE_IMPORT_CACHE_BYTES = 256 * 1024 * 1024;
 
 async function walkJsonl(root, depth = 6) {
   const files = [];
@@ -134,6 +141,16 @@ export class HistoryStore {
     this.cache = new Map();
     this.db = null;
     this.lastScanAt = null;
+    this.portableImports = new Map();
+    this.portableImportBytes = 0;
+    const configuredImportTtl = Number(options.portableImportTtlMs ?? DEFAULT_PORTABLE_IMPORT_TTL_MS);
+    const configuredImportCacheBytes = Number(options.portableImportCacheBytes ?? DEFAULT_PORTABLE_IMPORT_CACHE_BYTES);
+    this.portableImportTtlMs = Number.isFinite(configuredImportTtl)
+      ? Math.max(1, configuredImportTtl)
+      : DEFAULT_PORTABLE_IMPORT_TTL_MS;
+    this.portableImportCacheBytes = Number.isFinite(configuredImportCacheBytes)
+      ? Math.max(0, configuredImportCacheBytes)
+      : DEFAULT_PORTABLE_IMPORT_CACHE_BYTES;
   }
 
   async init() {
@@ -359,6 +376,76 @@ export class HistoryStore {
 
   async exportPortable(source, id) {
     return createPortableSession(this, source, id);
+  }
+
+  prunePortableImports(now = Date.now()) {
+    for (const [token, entry] of this.portableImports) {
+      if (entry.expiresAt > now || entry.inUse) continue;
+      this.portableImports.delete(token);
+      this.portableImportBytes -= entry.bytes;
+    }
+  }
+
+  evictPortableImports(requiredBytes) {
+    this.prunePortableImports();
+    if (requiredBytes > this.portableImportCacheBytes) return false;
+    for (const [token, entry] of this.portableImports) {
+      if (this.portableImportBytes + requiredBytes <= this.portableImportCacheBytes) break;
+      if (entry.inUse) continue;
+      this.portableImports.delete(token);
+      this.portableImportBytes -= entry.bytes;
+    }
+    return this.portableImportBytes + requiredBytes <= this.portableImportCacheBytes;
+  }
+
+  async preparePortable(buffer) {
+    const { preview, validated } = await preparePortableSession(this, buffer);
+    const bytes = Object.values(validated.files).reduce((sum, file) => sum + file.byteLength, 0);
+    if (!this.evictPortableImports(bytes)) {
+      return { ...preview, importToken: null, importTokenExpiresAt: null };
+    }
+    const importToken = randomUUID();
+    const expiresAt = Date.now() + this.portableImportTtlMs;
+    this.portableImports.set(importToken, {
+      validated,
+      bytes,
+      expiresAt,
+      inUse: false,
+    });
+    this.portableImportBytes += bytes;
+    return {
+      ...preview,
+      importToken,
+      importTokenExpiresAt: new Date(expiresAt).toISOString(),
+    };
+  }
+
+  async importPreparedPortable(importToken, options = {}) {
+    this.prunePortableImports();
+    const token = String(importToken ?? "");
+    const entry = this.portableImports.get(token);
+    if (!entry) {
+      throw new PortableSessionError("导入检查结果已过期，请重新选择压缩包", {
+        code: "IMPORT_TOKEN_EXPIRED",
+        status: 410,
+      });
+    }
+    if (entry.inUse) {
+      throw new PortableSessionError("该会话正在导入，请勿重复提交", {
+        code: "IMPORT_IN_PROGRESS",
+        status: 409,
+      });
+    }
+    entry.inUse = true;
+    try {
+      const imported = await importValidatedPortableSession(this, entry.validated, options);
+      this.portableImports.delete(token);
+      this.portableImportBytes -= entry.bytes;
+      return imported;
+    } finally {
+      const retained = this.portableImports.get(token);
+      if (retained) retained.inUse = false;
+    }
   }
 
   async inspectPortable(buffer) {

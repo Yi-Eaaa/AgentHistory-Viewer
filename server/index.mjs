@@ -140,16 +140,28 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/portable/inspect") {
       const body = await readRequestBody(request, archiveLimit);
       if (!body.length) return json(response, 400, { error: "请选择会话压缩包" });
-      return json(response, 200, await store.inspectPortable(body));
+      return json(response, 200, await store.preparePortable(body));
     }
     if (request.method === "POST" && url.pathname === "/api/portable/import") {
       const body = await readRequestBody(request, archiveLimit);
-      if (!body.length) return json(response, 400, { error: "请选择会话压缩包" });
-      const imported = await store.importPortable(body, {
+      if (!body.length) return json(response, 400, { error: "请选择会话压缩包或提供导入令牌" });
+      const options = {
         mode: url.searchParams.get("mode"),
         workspace: url.searchParams.get("workspace"),
         overwrite: url.searchParams.get("overwrite") === "true",
-      });
+      };
+      let imported;
+      if ((request.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        let payload;
+        try {
+          payload = JSON.parse(body.toString("utf8"));
+        } catch {
+          throw new PortableSessionError("导入请求格式无效", { code: "INVALID_IMPORT_REQUEST" });
+        }
+        imported = await store.importPreparedPortable(payload?.importToken, options);
+      } else {
+        imported = await store.importPortable(body, options);
+      }
       return json(response, 200, imported);
     }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/(codex|claude)\/([^/]+)$/);

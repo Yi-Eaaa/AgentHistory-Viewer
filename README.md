@@ -204,8 +204,8 @@ npm start
 | `GET` | `/api/stats` | 使用统计；支持 `source`、`granularity`、`from`、`to` |
 | `GET` | `/api/export/:source/:id?format=md\|html` | 导出 Markdown 或 HTML |
 | `GET` | `/api/portable/export/:source/:id` | 导出可恢复的 `.agenthistory.zip` 完整会话包 |
-| `POST` | `/api/portable/inspect` | 预检并校验会话包，不写入历史目录 |
-| `POST` | `/api/portable/import?mode=original\|mapped&workspace=...&overwrite=true\|false` | 导入会话；映射模式需要目标工作区，冲突覆盖需要显式确认 |
+| `POST` | `/api/portable/inspect` | 预检并校验会话包，返回短期导入令牌，不写入历史目录 |
+| `POST` | `/api/portable/import?mode=original\|mapped&workspace=...&overwrite=true\|false` | 使用预检令牌导入会话；映射模式需要目标工作区，冲突覆盖需要显式确认 |
 
 `/api/sessions` 仍兼容旧参数 `project`，建议新调用使用 `workspace`。
 

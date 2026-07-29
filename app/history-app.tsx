@@ -86,6 +86,8 @@ type ImportPreview = {
   checkpointCount: number;
   conflict: boolean;
   conflicts: { sessionId?: string; path: string; main?: boolean }[];
+  importToken: string | null;
+  importTokenExpiresAt: string | null;
 };
 type ImportResult = {
   source: "codex" | "claude";
@@ -461,7 +463,7 @@ export default function HistoryApp() {
     return () => window.clearTimeout(timer);
   }, [query]);
 
-  const loadSessions = useCallback(async () => {
+  const loadSessions = useCallback(async (selectionOverride?: string) => {
     setLoadingList(true);
     setError("");
     try {
@@ -475,18 +477,22 @@ export default function HistoryApp() {
       setSourceTotals(payload.facets.sources);
       setFavoriteCount(payload.facets.favorites);
       setTotal(payload.total);
-      if (payload.items.length === 0) {
-        setSelectedKey("");
-        setSession(null);
-      } else if (!selectedKey || !payload.items.some((item) => `${item.source}:${item.id}` === selectedKey)) {
-        setSelectedKey(`${payload.items[0].source}:${payload.items[0].id}`);
+      if (!selectionOverride) {
+        if (payload.items.length === 0) {
+          setSelectedKey("");
+          setSession(null);
+        } else {
+          setSelectedKey((current) => current && payload.items.some((item) => `${item.source}:${item.id}` === current)
+            ? current
+            : `${payload.items[0].source}:${payload.items[0].id}`);
+        }
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法读取会话");
     } finally {
       setLoadingList(false);
     }
-  }, [source, debouncedQuery, workspaceFilter, favoritesOnly, selectedKey]);
+  }, [source, debouncedQuery, workspaceFilter, favoritesOnly]);
 
   useEffect(() => { void loadSessions(); }, [loadSessions]);
   useEffect(() => {
@@ -605,19 +611,31 @@ export default function HistoryApp() {
       if (importMode === "mapped") params.set("workspace", importWorkspace.trim());
       const result = await getJson<ImportResult>(`/api/portable/import?${params}`, {
         method: "POST",
-        headers: { "content-type": "application/zip" },
-        body: importFile,
+        headers: { "content-type": importPreview.importToken ? "application/json" : "application/zip" },
+        body: importPreview.importToken
+          ? JSON.stringify({ importToken: importPreview.importToken })
+          : importFile,
       });
       setImportResult(result);
       setOverwriteArmed(false);
-      await loadSessions();
       setView("history");
-      setSelectedKey(`${result.source}:${result.sessionId}`);
+      const importedKey = `${result.source}:${result.sessionId}`;
+      setSelectedKey(importedKey);
       setMobileConversationOpen(true);
+      void loadSessions(importedKey);
     } catch (reason) {
-      if (reason instanceof ApiRequestError && reason.status === 409 && !overwriteArmed) {
+      if (
+        reason instanceof ApiRequestError
+        && reason.status === 409
+        && reason.payload.code === "SESSION_CONFLICT"
+        && !overwriteArmed
+      ) {
         setOverwriteArmed(true);
         setImportError("目标位置发现现有会话文件。请核对信息，再次确认后覆盖导入。");
+      } else if (reason instanceof ApiRequestError && reason.status === 410) {
+        setImportPreview(null);
+        setOverwriteArmed(false);
+        setImportError("导入检查结果已过期，请重新选择压缩包。");
       } else {
         setImportError(reason instanceof Error ? reason.message : "导入失败");
       }
