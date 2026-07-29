@@ -70,12 +70,64 @@ type Stats = {
   timeline: { date: string; sessions: number; messages: number; tokens: number }[];
   heatmap: { date: string; count: number }[];
 };
+type ImportPreview = {
+  format: string;
+  version: number;
+  source: "codex" | "claude";
+  sessionId: string;
+  title: string;
+  originalWorkspace: string;
+  startedAt: string | null;
+  updatedAt: string | null;
+  model: string | null;
+  fileCount: number;
+  totalBytes: number;
+  subagentCount: number;
+  checkpointCount: number;
+  conflict: boolean;
+  conflicts: { sessionId?: string; path: string; main?: boolean }[];
+};
+type ImportResult = {
+  source: "codex" | "claude";
+  sessionId: string;
+  title: string;
+  workspace: string;
+  mode: "original" | "mapped";
+  overwritten: boolean;
+  backupPath: string | null;
+  resume: { command: string; workspace: string; note: string | null };
+};
+
+class ApiRequestError extends Error {
+  status: number;
+  payload: Record<string, unknown>;
+
+  constructor(message: string, status: number, payload: Record<string, unknown>) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
 
 const number = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
 const fullNumber = new Intl.NumberFormat("zh-CN");
 
 function formatNumber(value = 0) {
   return number.format(value);
+}
+
+function formatBytes(value = 0) {
+  if (value < 1024) return `${value} B`;
+  const units = ["KB", "MB", "GB"];
+  let size = value;
+  let unit = "";
+  for (const candidate of units) {
+    size /= 1024;
+    unit = candidate;
+    if (size < 1024) break;
+  }
+  return `${size >= 10 ? size.toFixed(0) : size.toFixed(1)} ${unit}`;
 }
 
 function formatDate(value: string | null, long = false) {
@@ -123,8 +175,12 @@ function sourceLabel(source: Source) {
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `请求失败 (${response.status})`);
+    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+    throw new ApiRequestError(
+      typeof payload.error === "string" ? payload.error : `请求失败 (${response.status})`,
+      response.status,
+      payload,
+    );
   }
   return response.json();
 }
@@ -363,6 +419,15 @@ export default function HistoryApp() {
   const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
   const [theme, setTheme] = useState("light");
   const [refreshing, setRefreshing] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importMode, setImportMode] = useState<"original" | "mapped">("original");
+  const [importWorkspace, setImportWorkspace] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [overwriteArmed, setOverwriteArmed] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState("");
   const messageScrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollRestoreRef = useRef<number | null>(null);
   const scrollIdleTimersRef = useRef(new Map<HTMLElement, number>());
@@ -480,6 +545,87 @@ export default function HistoryApp() {
     }
   }
 
+  function openImportDialog() {
+    setImportOpen(true);
+    setImportFile(null);
+    setImportPreview(null);
+    setImportMode("original");
+    setImportWorkspace("");
+    setImportBusy(false);
+    setOverwriteArmed(false);
+    setImportResult(null);
+    setImportError("");
+  }
+
+  function closeImportDialog() {
+    if (importBusy) return;
+    setImportOpen(false);
+  }
+
+  async function inspectImportFile(file: File | null) {
+    setImportFile(file);
+    setImportPreview(null);
+    setImportResult(null);
+    setOverwriteArmed(false);
+    setImportError("");
+    if (!file) return;
+    setImportBusy(true);
+    try {
+      const preview = await getJson<ImportPreview>("/api/portable/inspect", {
+        method: "POST",
+        headers: { "content-type": "application/zip" },
+        body: file,
+      });
+      setImportPreview(preview);
+      setImportWorkspace(preview.originalWorkspace);
+    } catch (reason) {
+      setImportError(reason instanceof Error ? reason.message : "无法读取会话压缩包");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  async function submitImport() {
+    if (!importFile || !importPreview || importBusy) return;
+    if (importMode === "mapped" && !importWorkspace.trim()) {
+      setImportError("请输入目标机器上的工作区绝对路径");
+      return;
+    }
+    if (importPreview.conflict && !overwriteArmed) {
+      setOverwriteArmed(true);
+      return;
+    }
+    setImportBusy(true);
+    setImportError("");
+    try {
+      const params = new URLSearchParams({
+        mode: importMode,
+        overwrite: overwriteArmed ? "true" : "false",
+      });
+      if (importMode === "mapped") params.set("workspace", importWorkspace.trim());
+      const result = await getJson<ImportResult>(`/api/portable/import?${params}`, {
+        method: "POST",
+        headers: { "content-type": "application/zip" },
+        body: importFile,
+      });
+      setImportResult(result);
+      setOverwriteArmed(false);
+      await loadSessions();
+      setView("history");
+      setSelectedKey(`${result.source}:${result.sessionId}`);
+      setMobileConversationOpen(true);
+    } catch (reason) {
+      if (reason instanceof ApiRequestError && reason.status === 409 && !overwriteArmed) {
+        setOverwriteArmed(true);
+        setImportError("目标位置发现现有会话文件。请核对信息，再次确认后覆盖导入。");
+      } else {
+        setImportError(reason instanceof Error ? reason.message : "导入失败");
+      }
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   function fastScrollTimeline(top: number) {
     const target = messageScrollRef.current;
     if (!target) return;
@@ -579,6 +725,7 @@ export default function HistoryApp() {
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>对话</button>
           <button className={view === "stats" ? "active" : ""} onClick={() => setView("stats")}>统计</button>
         </nav>
+        <button className="topbar-import" onClick={openImportDialog} title="导入可恢复的会话压缩包"><span aria-hidden="true">⇩</span><b>导入</b></button>
         <button className="icon-button" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="切换深浅色">{theme === "light" ? "◐" : "○"}</button>
         <button className={`icon-button refresh-button ${refreshing ? "refreshing" : ""}`} onClick={() => void refresh()} aria-label={refreshing ? "正在刷新历史" : "刷新历史和当前会话"} title={refreshing ? "正在刷新…" : "刷新历史和当前会话"} disabled={refreshing}>↻</button>
       </header>
@@ -700,8 +847,8 @@ export default function HistoryApp() {
                   </div>
                   <div className="conversation-actions">
                     <button className={session.favorite ? "favorite active" : "favorite"} onClick={() => void toggleFavorite()} title="收藏会话">{session.favorite ? "★" : "☆"}</button>
-                    <a href={`/api/export/${session.source}/${encodeURIComponent(session.id)}?format=md`} className="action-button">导出 MD</a>
-                    <details className="more-menu"><summary>•••</summary><div><a href={`/api/export/${session.source}/${encodeURIComponent(session.id)}?format=html`}>导出 HTML</a><button onClick={() => navigator.clipboard?.writeText(window.location.href)}>复制页面链接</button></div></details>
+                    <a href={`/api/portable/export/${session.source}/${encodeURIComponent(session.id)}`} className="action-button" title="导出可在其他环境恢复的完整会话包">导出会话</a>
+                    <details className="more-menu"><summary>•••</summary><div><a href={`/api/export/${session.source}/${encodeURIComponent(session.id)}?format=md`}>导出 Markdown</a><a href={`/api/export/${session.source}/${encodeURIComponent(session.id)}?format=html`}>导出 HTML</a><button onClick={() => navigator.clipboard?.writeText(window.location.href)}>复制页面链接</button></div></details>
                   </div>
                   <div className="conversation-facts">
                     <span>{session.model || "未知模型"}</span><span>{session.messageCount} 条消息</span><span>{formatNumber(session.tokens.total)} tokens</span><span>{session.toolCount} 次工具调用</span><span className="session-id-fact" title={session.id}>session_id: {session.id}</span>
@@ -743,6 +890,103 @@ export default function HistoryApp() {
           </aside>
         )}
       </div>
+
+      {importOpen && (
+        <div className="import-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeImportDialog(); }}>
+          <section className="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title">
+            <header>
+              <div>
+                <span className="import-kicker">PORTABLE SESSION</span>
+                <h2 id="import-dialog-title">导入完整历史会话</h2>
+              </div>
+              <button onClick={closeImportDialog} aria-label="关闭导入窗口" disabled={importBusy}>×</button>
+            </header>
+
+            {!importResult ? (
+              <div className="import-dialog-body">
+                <label className={`archive-picker ${importFile ? "selected" : ""}`}>
+                  <input
+                    type="file"
+                    accept=".zip,.agenthistory.zip,application/zip"
+                    onChange={(event) => void inspectImportFile(event.target.files?.[0] ?? null)}
+                    disabled={importBusy}
+                  />
+                  <span className="archive-picker-icon">⇩</span>
+                  <span>
+                    <strong>{importFile?.name || "选择 .agenthistory.zip 压缩包"}</strong>
+                    <small>{importFile ? `${formatBytes(importFile.size)} · 已完成本地读取` : "先执行完整性检查，不会立即写入历史目录"}</small>
+                  </span>
+                  <b>{importBusy ? "检查中…" : importFile ? "重新选择" : "浏览文件"}</b>
+                </label>
+
+                {importPreview && (
+                  <>
+                    <section className="import-preview">
+                      <div className="import-source-row">
+                        <SourceMark source={importPreview.source} />
+                        <div><strong>{importPreview.title}</strong><small>{sourceLabel(importPreview.source)} · {importPreview.model || "未知模型"}</small></div>
+                      </div>
+                      <dl>
+                        <dt>Session ID</dt><dd>{importPreview.sessionId}</dd>
+                        <dt>原工作区</dt><dd>{importPreview.originalWorkspace || "未知"}</dd>
+                        <dt>会话文件</dt><dd>{importPreview.fileCount} 个 · {formatBytes(importPreview.totalBytes)}</dd>
+                        <dt>附加内容</dt><dd>{importPreview.subagentCount} 个子代理 · {importPreview.checkpointCount} 个 checkpoint 文件</dd>
+                      </dl>
+                    </section>
+
+                    <fieldset className="workspace-mode">
+                      <legend>工作区恢复方式</legend>
+                      <label className={importMode === "original" ? "active" : ""}>
+                        <input type="radio" name="import-mode" checked={importMode === "original"} onChange={() => { setImportMode("original"); setOverwriteArmed(false); }} />
+                        <span><strong>保持原工作区</strong><small>按原始路径和元数据恢复，适合目录结构相同的环境。</small></span>
+                      </label>
+                      <label className={importMode === "mapped" ? "active" : ""}>
+                        <input type="radio" name="import-mode" checked={importMode === "mapped"} onChange={() => { setImportMode("mapped"); setOverwriteArmed(false); }} />
+                        <span><strong>映射到新工作区</strong><small>保留消息内容，仅把导入副本的工作区关联改到本机路径。</small></span>
+                      </label>
+                      {importMode === "mapped" && (
+                        <label className="workspace-path">
+                          <span>本机目标工作区绝对路径</span>
+                          <input value={importWorkspace} onChange={(event) => { setImportWorkspace(event.target.value); setOverwriteArmed(false); }} placeholder="/Users/name/workspace/project" />
+                        </label>
+                      )}
+                    </fieldset>
+
+                    {importPreview.conflict && !overwriteArmed && (
+                      <div className="import-warning"><strong>检测到相同 Session ID</strong><span>预检阶段没有修改任何文件。继续后还需要再次确认覆盖。</span></div>
+                    )}
+                    {overwriteArmed && (
+                      <div className="import-warning danger"><strong>即将覆盖本机现有会话</strong><span>旧文件会先备份到 state/import-backups，可用于恢复。请再次点击下方红色按钮确认。</span></div>
+                    )}
+                  </>
+                )}
+
+                {importError && <div className="import-inline-error">{importError}</div>}
+              </div>
+            ) : (
+              <div className="import-success">
+                <span className="success-mark">✓</span>
+                <h3>会话已完整导入</h3>
+                <p>{importResult.overwritten ? "原会话已备份后覆盖。" : "历史目录与安全索引已经更新。"}</p>
+                <dl>
+                  <dt>工作区</dt><dd>{importResult.workspace}</dd>
+                  {importResult.backupPath && <><dt>旧文件备份</dt><dd>{importResult.backupPath}</dd></>}
+                </dl>
+                <label>
+                  <span>继续对话命令</span>
+                  <div><code>{importResult.resume.command}</code><button onClick={() => navigator.clipboard?.writeText(importResult.resume.command)}>复制</button></div>
+                </label>
+                {importResult.resume.note && <small>{importResult.resume.note}</small>}
+              </div>
+            )}
+
+            <footer>
+              <button className="secondary" onClick={closeImportDialog} disabled={importBusy}>{importResult ? "完成" : "取消"}</button>
+              {!importResult && <button className={overwriteArmed ? "danger" : "primary"} onClick={() => void submitImport()} disabled={!importPreview || importBusy}>{importBusy ? "正在处理…" : overwriteArmed ? "确认覆盖并导入" : importPreview?.conflict ? "继续并检查冲突" : "导入会话"}</button>}
+            </footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

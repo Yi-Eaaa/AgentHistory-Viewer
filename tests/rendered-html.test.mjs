@@ -143,3 +143,25 @@ test("tool, subagent and timeline end blocks share the centered message frame", 
   assert.match(css, /\.timeline-end\s*\{[^}]*width:\s*min\(100%, var\(--timeline-width\)\)[^}]*justify-content:\s*center/s);
   assert.doesNotMatch(css, /margin:\s*0 auto (?:18|20)px 44px/);
 });
+
+test("portable session import and export expose preflight, workspace mapping and overwrite confirmation", async () => {
+  const [source, css, server] = await Promise.all([
+    readFile(new URL("../app/history-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../server/index.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /\/api\/portable\/export\/\$\{session\.source\}/);
+  assert.match(source, />导出会话<\/a>/);
+  assert.match(source, /\/api\/portable\/inspect/);
+  assert.match(source, /\/api\/portable\/import\?\$\{params\}/);
+  assert.match(source, /保持原工作区/);
+  assert.match(source, /映射到新工作区/);
+  assert.match(source, /overwriteArmed/);
+  assert.match(source, /确认覆盖并导入/);
+  assert.match(source, /旧文件会先备份到 state\/import-backups/);
+  assert.match(css, /\.import-dialog/);
+  assert.match(css, /\.import-warning\.danger/);
+  assert.match(server, /\/api\/portable\/inspect/);
+  assert.match(server, /\/api\/portable\/import/);
+  assert.match(server, /AGENT_HISTORY_IMPORT_MAX_BYTES/);
+});
