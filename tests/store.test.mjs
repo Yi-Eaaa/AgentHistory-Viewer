@@ -36,11 +36,23 @@ test("HistoryStore scans, searches, favorites and exports", async () => {
     { type: "event_msg", timestamp: "2026-06-30T01:00:02Z", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 30, output_tokens: 10, total_tokens: 40 } } } },
   ];
   await writeFile(path.join(codexRoot, `rollout-${secondId}.jsonl`), `${secondRows.map(JSON.stringify).join("\n")}\n`);
+  await writeFile(path.join(root, "session_index.jsonl"), `${[
+    { id, thread_name: "Codex 原生会话标题", updated_at: "2026-07-01T01:00:03Z" },
+    { id: secondId, thread_name: "第二个原生标题", updated_at: "2026-06-30T01:00:02Z" },
+  ].map(JSON.stringify).join("\n")}\n`);
   const claudeId = "33333333-4444-4555-8666-777777777777";
+  const claudeProjectRoot = path.join(claudeRoot, "-work-claude-demo");
+  await mkdir(claudeProjectRoot);
   const claudeRows = [
     { type: "user", sessionId: claudeId, cwd: "/work/claude-demo", timestamp: "2026-06-29T01:00:00Z", message: { role: "user", content: "Claude 工作区会话" } },
   ];
-  await writeFile(path.join(claudeRoot, `${claudeId}.jsonl`), `${claudeRows.map(JSON.stringify).join("\n")}\n`);
+  await writeFile(path.join(claudeProjectRoot, `${claudeId}.jsonl`), `${claudeRows.map(JSON.stringify).join("\n")}\n`);
+  await writeFile(path.join(claudeProjectRoot, "sessions-index.json"), JSON.stringify({
+    version: 1,
+    entries: [
+      { sessionId: claudeId, summary: "Claude 原生会话标题", firstPrompt: "Claude 工作区会话" },
+    ],
+  }));
   const store = new HistoryStore({ codexRoot, claudeRoot, stateDir: path.join(root, "state") });
   await store.init();
   const searched = await store.list({ q: "海盐柠檬" });
@@ -51,6 +63,9 @@ test("HistoryStore scans, searches, favorites and exports", async () => {
   assert.deepEqual(visible.facets.sources, { all: 3, codex: 2, claude: 1 });
   assert.equal(visible.facets.workspaces.length, 3);
   assert.equal(visible.items.find((item) => item.id === id).subagentCount, 1);
+  assert.equal(visible.items.find((item) => item.id === id).title, "Codex 原生会话标题");
+  assert.equal(visible.items.find((item) => item.id === claudeId).title, "Claude 原生会话标题");
+  assert.equal(visible.items.find((item) => item.id === claudeId).snippet, "Claude 工作区会话");
   const parent = await store.get("codex", id);
   const subagent = parent.messages.find((message) => message.kind === "subagent_session");
   assert.equal(subagent.subagent.id, childId);
@@ -84,6 +99,52 @@ test("HistoryStore scans, searches, favorites and exports", async () => {
   assert.match(markdown.body, /独特搜索词/);
   const html = await store.export("codex", id, "html");
   assert.match(html.body, /<!doctype html>/);
+
+  await writeFile(path.join(root, "session_index.jsonl"), `${[
+    { id, thread_name: "Codex 更新后的原生标题", updated_at: "2026-07-01T01:00:04Z" },
+  ].map(JSON.stringify).join("\n")}\n`);
+  await store.refresh();
+  assert.equal((await store.get("codex", id)).title, "Codex 更新后的原生标题");
+});
+
+test("Claude transcript title metadata takes precedence over the first prompt", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-history-claude-title-"));
+  const codexRoot = path.join(root, "codex");
+  const claudeRoot = path.join(root, "claude");
+  await mkdir(codexRoot);
+  await mkdir(claudeRoot);
+  const id = "44444444-5555-4666-8777-888888888888";
+  const rows = [
+    { type: "summary", sessionId: id, summary: "自动摘要标题" },
+    { type: "ai-title", sessionId: id, aiTitle: "Claude Code AI 标题" },
+    { type: "custom-title", sessionId: id, customTitle: "用户自定义标题" },
+    { type: "user", sessionId: id, cwd: "/work/claude-title", timestamp: "2026-07-02T01:00:00Z", message: { role: "user", content: "不应作为标题的首条提问" } },
+  ];
+  await writeFile(path.join(claudeRoot, `${id}.jsonl`), `${rows.map(JSON.stringify).join("\n")}\n`);
+  const store = new HistoryStore({ codexRoot, claudeRoot, stateDir: path.join(root, "state") });
+  await store.init();
+  const session = await store.get("claude", id);
+  assert.equal(session.title, "用户自定义标题");
+  assert.equal(session.snippet, "不应作为标题的首条提问");
+});
+
+test("Claude ai-title metadata is used when there is no custom title", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-history-claude-ai-title-"));
+  const codexRoot = path.join(root, "codex");
+  const claudeRoot = path.join(root, "claude");
+  await mkdir(codexRoot);
+  await mkdir(claudeRoot);
+  const id = "55555555-6666-4777-8888-999999999999";
+  const rows = [
+    { type: "ai-title", sessionId: id, aiTitle: "Claude Code 原生 AI 标题" },
+    { type: "user", sessionId: id, cwd: "/work/claude-ai-title", timestamp: "2026-07-03T01:00:00Z", message: { role: "user", content: "首条提问回退文本" } },
+  ];
+  await writeFile(path.join(claudeRoot, `${id}.jsonl`), `${rows.map(JSON.stringify).join("\n")}\n`);
+  const store = new HistoryStore({ codexRoot, claudeRoot, stateDir: path.join(root, "state") });
+  await store.init();
+  const session = await store.get("claude", id);
+  assert.equal(session.title, "Claude Code 原生 AI 标题");
+  assert.equal(session.snippet, "首条提问回退文本");
 });
 
 test("history roots fall back to the current user's home directory", () => {

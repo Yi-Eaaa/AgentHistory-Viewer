@@ -85,6 +85,7 @@ function subagentTypeFromSource(source) {
 }
 
 function finalizeSession(base, messages, tokenUsage, models) {
+  const { nativeTitle, ...sessionBase } = base;
   const visible = messages.filter((item) => item.text || item.kind === "tool_call");
   const firstQuestion = visible.find((item) => item.role === "user" && item.kind === "message");
   const lastTimestamp = [...visible].reverse().find((item) => item.timestamp)?.timestamp;
@@ -92,9 +93,12 @@ function finalizeSession(base, messages, tokenUsage, models) {
   const userCount = visible.filter((item) => item.role === "user" && item.kind === "message").length;
   const assistantCount = visible.filter((item) => item.role === "assistant" && item.kind === "message").length;
   const toolCount = visible.filter((item) => item.kind === "tool_call").length;
-  const title = compactText(stripInjectedContext(firstQuestion?.text ?? ""), 86) || base.fallbackTitle;
+  const title =
+    compactText(nativeTitle ?? "", 240) ||
+    compactText(stripInjectedContext(firstQuestion?.text ?? ""), 86) ||
+    base.fallbackTitle;
   return {
-    ...base,
+    ...sessionBase,
     title,
     snippet: compactText(stripInjectedContext(firstQuestion?.text ?? ""), 180),
     startedAt: base.startedAt ?? visible.find((item) => item.timestamp)?.timestamp ?? null,
@@ -279,6 +283,9 @@ export async function parseClaude(file) {
   let sessionId = file.id;
   let cwd = "";
   let startedAt = file.mtime;
+  let customTitle = null;
+  let aiTitle = null;
+  let summaryTitle = null;
   const tokenUsage = { input: 0, output: 0, cached: 0, reasoning: 0, total: 0 };
 
   rows.forEach((line, index) => {
@@ -288,6 +295,18 @@ export async function parseClaude(file) {
     cwd = row.cwd ?? cwd;
     const timestamp = row.timestamp ?? null;
     if (timestamp && (!startedAt || new Date(timestamp) < new Date(startedAt))) startedAt = isoDate(timestamp, startedAt);
+    if (row.type === "custom-title") {
+      customTitle = asText(row.customTitle ?? row.custom_title ?? row.title).trim() || null;
+      return;
+    }
+    if (row.type === "ai-title") {
+      aiTitle = asText(row.aiTitle ?? row.ai_title ?? row.title).trim() || null;
+      return;
+    }
+    if (row.type === "summary") {
+      summaryTitle = asText(row.summary ?? row.title).trim() || summaryTitle;
+      return;
+    }
     const role = row.message?.role ?? row.type;
     const content = row.message?.content;
     const messageModel = row.message?.model ?? null;
@@ -384,6 +403,7 @@ export async function parseClaude(file) {
       fileName: path.basename(file.path),
       sizeBytes: file.size,
       startedAt,
+      nativeTitle: customTitle ?? aiTitle ?? summaryTitle,
     },
     pairTools(messages),
     tokenUsage,

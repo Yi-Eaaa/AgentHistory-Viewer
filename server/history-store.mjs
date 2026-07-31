@@ -1,4 +1,4 @@
-import { readdir, stat, mkdir } from "node:fs/promises";
+import { readdir, stat, mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -16,6 +16,76 @@ import { compactText, dateBucket, htmlEscape } from "./utils.mjs";
 
 const DEFAULT_PORTABLE_IMPORT_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_PORTABLE_IMPORT_CACHE_BYTES = 256 * 1024 * 1024;
+
+function normalizedNativeTitle(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  return compactText(value, 240);
+}
+
+async function readCodexNativeTitles(root) {
+  const titles = new Map();
+  const indexPath = path.join(path.dirname(root), "session_index.jsonl");
+  let body;
+  try {
+    body = await readFile(indexPath, "utf8");
+  } catch {
+    return titles;
+  }
+  for (const line of body.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line);
+      const title = normalizedNativeTitle(row.thread_name);
+      if (row.id && title) titles.set(String(row.id), title);
+    } catch {
+      // Ignore a partially written or legacy index row.
+    }
+  }
+  return titles;
+}
+
+function claudeIndexEntries(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value.entries)) return value.entries;
+  if (value.entries && typeof value.entries === "object") return Object.values(value.entries);
+  return Object.values(value).filter((entry) => entry && typeof entry === "object");
+}
+
+async function readClaudeNativeTitles(root) {
+  const titles = new Map();
+  let rootEntries = [];
+  try {
+    rootEntries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return titles;
+  }
+  const indexPaths = [
+    path.join(root, "sessions-index.json"),
+    ...rootEntries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(root, entry.name, "sessions-index.json")),
+  ];
+  await Promise.all(indexPaths.map(async (indexPath) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(indexPath, "utf8"));
+    } catch {
+      return;
+    }
+    for (const entry of claudeIndexEntries(parsed)) {
+      const sessionId = entry.sessionId ?? entry.session_id ?? entry.id;
+      const title = normalizedNativeTitle(
+        entry.customTitle ??
+        entry.custom_title ??
+        entry.title ??
+        entry.summary,
+      );
+      if (sessionId && title) titles.set(String(sessionId), title);
+    }
+  }));
+  return titles;
+}
 
 export function resolveHistoryRoot(configured, fallback) {
   const raw = typeof configured === "string" ? configured.trim() : configured;
@@ -155,6 +225,7 @@ export class HistoryStore {
     this.stateDir = options.stateDir ?? process.env.AGENT_HISTORY_STATE ?? path.resolve("state");
     this.files = new Map();
     this.cache = new Map();
+    this.nativeTitles = new Map();
     this.db = null;
     this.lastScanAt = null;
     this.portableImports = new Map();
@@ -190,9 +261,11 @@ export class HistoryStore {
   }
 
   async refresh() {
-    const [codexFiles, claudeFiles] = await Promise.all([
+    const [codexFiles, claudeFiles, codexTitles, claudeTitles] = await Promise.all([
       walkJsonl(this.roots.codex),
       walkJsonl(this.roots.claude),
+      readCodexNativeTitles(this.roots.codex),
+      readClaudeNativeTitles(this.roots.claude),
     ]);
     const next = new Map();
     for (const [source, files] of [["codex", codexFiles], ["claude", claudeFiles]]) {
@@ -204,21 +277,32 @@ export class HistoryStore {
       }
     }
     this.files = next;
+    this.nativeTitles = new Map([
+      ...[...codexTitles].map(([id, title]) => [`codex:${id}`, title]),
+      ...[...claudeTitles].map(([id, title]) => [`claude:${id}`, title]),
+    ]);
     this.lastScanAt = new Date().toISOString();
     return { codex: codexFiles.length, claude: claudeFiles.length, total: next.size, scannedAt: this.lastScanAt };
+  }
+
+  withNativeTitle(key, session) {
+    const title = this.nativeTitles.get(key);
+    return title && title !== session.title ? { ...session, title } : session;
   }
 
   async load(key) {
     const file = this.files.get(key);
     if (!file) return null;
     const cached = this.cache.get(key);
-    if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size) return cached.session;
+    if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size) {
+      return this.withNativeTitle(key, cached.session);
+    }
     const session = file.source === "codex" ? await parseCodex(file) : await parseClaude(file);
     // The session id embedded in a file can be cleaner than its filename. Keep both addressable.
     session.id = file.id;
     const next = { mtimeMs: file.mtimeMs, size: file.size, session };
     this.cache.set(key, next);
-    return session;
+    return this.withNativeTitle(key, session);
   }
 
   async loadAll(source = "all") {
