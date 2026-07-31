@@ -4,6 +4,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { UIEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { groupConsecutiveTools } from "./timeline-groups.mjs";
 
 type Source = "all" | "codex" | "claude";
@@ -114,6 +116,7 @@ class ApiRequestError extends Error {
 
 const number = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
 const fullNumber = new Intl.NumberFormat("zh-CN");
+const markdownPlugins = [remarkGfm];
 
 function formatNumber(value = 0) {
   return number.format(value);
@@ -172,6 +175,40 @@ function workspaceParent(value: string) {
 
 function sourceLabel(source: Source) {
   return source === "codex" ? "Codex" : source === "claude" ? "Claude Code" : "全部 Agent";
+}
+
+function MarkdownContent({ text, className = "" }: { text: string; className?: string }) {
+  return (
+    <div className={`markdown-body ${className}`.trim()}>
+      <ReactMarkdown
+        remarkPlugins={markdownPlugins}
+        components={{
+          a({ node: _node, href, children, ...props }) {
+            void _node;
+            const external = /^https?:\/\//i.test(href ?? "");
+            return (
+              <a
+                {...props}
+                href={href}
+                target={external ? "_blank" : undefined}
+                rel={external ? "noreferrer noopener" : undefined}
+              >
+                {children}
+              </a>
+            );
+          },
+          img({ node: _node, alt, ...props }) {
+            void _node;
+            // Historical Markdown can reference arbitrary local or remote images, which cannot use a fixed Next.js loader.
+            // eslint-disable-next-line @next/next/no-img-element
+            return <img {...props} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" />;
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -259,7 +296,7 @@ function SubagentTranscriptMessage({ message, model, query }: { message: Message
     return (
       <details className="subagent-reasoning">
         <summary><span>子代理思考</span><time>{formatDate(message.timestamp, true)}</time></summary>
-        <pre>{message.text}</pre>
+        <MarkdownContent text={message.text} />
       </details>
     );
   }
@@ -269,7 +306,7 @@ function SubagentTranscriptMessage({ message, model, query }: { message: Message
         <strong>{message.role === "user" ? "输入上下文" : message.model || model || "子代理"}</strong>
         <time>{formatDate(message.timestamp, true)}</time>
       </header>
-      <pre>{message.text}</pre>
+      <MarkdownContent text={message.text} />
     </article>
   );
 }
@@ -316,7 +353,7 @@ function MessageCard({ message, query, fallbackModel }: { message: Message; quer
     return (
       <details id={`message-${message.id}`} className={`reasoning-card ${matched ? "matched" : ""}`}>
         <summary><span>思考过程</span><small>{formatDate(message.timestamp)}</small></summary>
-        <pre>{message.text}</pre>
+        <MarkdownContent text={message.text} />
       </details>
     );
   }
@@ -353,7 +390,7 @@ function MessageCard({ message, query, fallbackModel }: { message: Message; quer
             <time>{formatDate(message.timestamp, true)}</time>
           </header>
         )}
-        <pre>{message.text}</pre>
+        <MarkdownContent text={message.text} />
       </div>
     </article>
   );

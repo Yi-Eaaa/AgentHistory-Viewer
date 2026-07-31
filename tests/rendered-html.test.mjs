@@ -71,6 +71,29 @@ test("subagent sessions use a distinct collapsible visual treatment", async () =
   assert.match(css, /\.subagent-card\s*\{[^}]*var\(--violet\)/s);
 });
 
+test("conversation messages render safe GitHub-flavored Markdown while tool logs stay literal", async () => {
+  const [source, css, packageJson] = await Promise.all([
+    readFile(new URL("../app/history-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /import ReactMarkdown from "react-markdown"/);
+  assert.match(source, /import remarkGfm from "remark-gfm"/);
+  assert.match(source, /function MarkdownContent/);
+  assert.ok((source.match(/<MarkdownContent text=\{message\.text\}/g) ?? []).length >= 4);
+  assert.match(source, /target=\{external \? "_blank" : undefined\}/);
+  assert.doesNotMatch(source, /dangerouslySetInnerHTML/);
+  assert.match(source, /<pre>\{message\.text \|\| "无"\}<\/pre>/);
+  assert.match(source, /<pre>\{message\.result \|\| "（空结果）"\}<\/pre>/);
+  assert.match(css, /\.markdown-body blockquote/);
+  assert.match(css, /\.markdown-body pre code/);
+  assert.match(css, /\.markdown-body table/);
+  assert.match(css, /\.markdown-body ul:not\(\.contains-task-list\)\s*\{[^}]*list-style:\s*disc/s);
+  assert.match(css, /\.markdown-body ol\s*\{[^}]*list-style:\s*decimal/s);
+  assert.match(packageJson, /"react-markdown"/);
+  assert.match(packageJson, /"remark-gfm"/);
+});
+
 test("model statistics visualize token usage relative to the busiest model", async () => {
   const [source, css] = await Promise.all([
     readFile(new URL("../app/history-app.tsx", import.meta.url), "utf8"),
